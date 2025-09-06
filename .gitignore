@@ -1,0 +1,7 @@
+﻿node_modules
+dist
+*.log
+# keep backend secrets out of git
+backend/.env
+# keep frontend local envs out of git
+frontend/.env.local
