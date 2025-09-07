@@ -1,3 +1,4 @@
+// server.js
 import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
@@ -9,17 +10,22 @@ import authRoutes from './src/routes/auth.js';
 import itemRoutes from './src/routes/items.js';
 import cartRoutes from './src/routes/cart.js';
 
-dotenv.config();
+// Load .env only for local/dev; Render/production uses injected env vars
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 const app = express();
 
-// Middleware
-app.use(helmet());
-app.use(express.json());
-app.use(morgan('dev'));
+/* ----------------------------- Middleware ----------------------------- */
+app.use(helmet());                // security headers
+app.use(express.json());          // JSON body parsing
+app.use(morgan('dev'));           // request logs
 
-// CORS allow-list (env) + optional "allow any localhost" for dev
-const allowAnyLocalhost = (process.env.ALLOW_ANY_LOCALHOST === 'true');
+// CORS allow-list via env:
+// - CLIENT_ORIGIN: comma-separated list of allowed origins (prod frontends)
+// - ALLOW_ANY_LOCALHOST=true: allow any http://localhost:* for local dev
+const allowAnyLocalhost = process.env.ALLOW_ANY_LOCALHOST === 'true';
 const allowlist = (process.env.CLIENT_ORIGIN || '')
   .split(',')
   .map(s => s.trim())
@@ -30,41 +36,53 @@ app.use(cors({
     // allow tools/curl without Origin
     if (!origin) return cb(null, true);
 
-    // allow any http://localhost:* or http://127.0.0.1:* when enabled
-    if (allowAnyLocalhost && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    // allow any localhost when enabled
+    if (allowAnyLocalhost && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
       return cb(null, true);
     }
 
-    // otherwise, fall back to explicit allowlist
+    // explicit allowlist for production
     if (allowlist.includes(origin)) return cb(null, true);
 
-    return cb(new Error(`Not allowed by CORS: ${origin}`));
+    const err = new Error(`Not allowed by CORS: ${origin}`);
+    err.status = 403;
+    return cb(err);
   },
   credentials: true,
+  optionsSuccessStatus: 200
 }));
 
-
-// Routes
-app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
+/* -------------------------------- Routes ------------------------------ */
+app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/cart', cartRoutes);
 
-// DB + server
+/* --------------------------- DB + Server Boot ------------------------- */
 const PORT = process.env.PORT || 4000;
-const MONGO_URI = process.env.MONGO_URI;
+const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
+
 if (!MONGO_URI) {
-  console.error('MONGO_URI is not set in .env');
+  console.error('Missing MONGO_URI/MONGODB_URI in environment');
   process.exit(1);
 }
 
 mongoose
   .connect(MONGO_URI)
   .then(() => {
-    console.log('MongoDB connected');
-    app.listen(PORT, () => console.log(`API running on :${PORT}`));
+    console.log('✅ MongoDB connected');
+    // Bind to all interfaces for Render/containers
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 API running on :${PORT}`);
+    });
   })
   .catch((err) => {
     console.error('Mongo error', err);
     process.exit(1);
   });
+
+// Optional: generic error handler (keeps JSON shape)
+app.use((err, _req, res, _next) => {
+  const status = err.status || 500;
+  res.status(status).json({ error: err.message || 'Internal Server Error' });
+});
